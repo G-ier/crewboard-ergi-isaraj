@@ -1,11 +1,9 @@
 from datetime import datetime
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, text, URL
 from dotenv import load_dotenv
 import os
 
 load_dotenv()
-
-DATABASE_URL = os.getenv("DATABASE_URL")
 
 def create_tables(engine):
     
@@ -77,8 +75,8 @@ def seed_flights(engine):
         for flight in flights:
             conn.execute(
                 text("""
-                    INSERT INTO flights (ID, "From", "To", Aircraft, Departure, Arrival, "Duty Hrs")
-                    VALUES (:ID, :From, :To, :Aircraft, :Departure, :Arrival, :"Duty Hrs")
+                    INSERT INTO flights (ID, "From", "To", Aircraft, Departure, Arrival, "Duty_hrs")
+                    VALUES (:ID, :From, :To, :Aircraft, :Departure, :Arrival, :Duty_hrs)
                     ON CONFLICT (ID) DO NOTHING
                 """),
                 flight
@@ -88,6 +86,15 @@ def seed_flights(engine):
 
 def main():
     
+    DATABASE_URL = URL.create(
+        "postgresql+psycopg",
+        username=os.getenv("POSTGRES_USER"),
+        password=os.getenv("POSTGRES_PASSWORD"),
+        host="db",
+        database=os.getenv("POSTGRES_DB"),
+        port=os.getenv("POSTGRES_PORT")
+    )
+
     engine = create_engine(DATABASE_URL)
     
     try:
@@ -101,8 +108,8 @@ def main():
         seed_flights(engine)
         
         print("Database seeded successfully!")
-    except:
-        print("Database seed failed!")
+    except Exception as e:
+        print(f"Database seed failed! Error: {e}")
 
 
 if __name__ == "__main__":
