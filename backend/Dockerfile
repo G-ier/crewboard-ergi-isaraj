@@ -1,0 +1,15 @@
+FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim
+
+ARG APP_HOME=/app
+WORKDIR $APP_HOME
+
+RUN groupadd -r app && useradd -r -g app -d /app -s /usr/sbin/nologin app
+
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev
+
+COPY . .
+
+EXPOSE 8001
+
+CMD ["uv", "run", "app/main:app", "--host", "0.0.0.0", "--port", "8001"]
