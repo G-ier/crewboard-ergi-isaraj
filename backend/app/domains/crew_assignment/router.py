@@ -6,6 +6,7 @@ from app.domains.crew_assignment.schemas import (
     AssignmentCreate,
     AssignmentRead,
     AssignmentValidationResult,
+    AutoAssignmentResult,
 )
 from app.domains.crew_assignment.service import CrewAssignmentService
 
@@ -56,16 +57,6 @@ def list_assignments(
     return [AssignmentRead.model_validate(a) for a in assignments]
 
 
-@router.get("/{assignment_id}", response_model=AssignmentRead)
-def get_assignment(
-    assignment_id: int,
-    db: Session = Depends(get_db_session),
-):
-
-    assignment = service.get_assignment(db, assignment_id)
-    return AssignmentRead.model_validate(assignment)
-
-
 @router.delete("/{assignment_id}", response_model=AssignmentRead)
 def delete_assignment(
     assignment_id: int,
@@ -83,3 +74,10 @@ def validate_assignment(
 ):
 
     return service.validate_assignment(db, payload.flight_id, payload.crew_employee_id)
+
+
+@router.post("/auto", response_model=AutoAssignmentResult)
+def auto_assign_flights(
+    db: Session = Depends(get_db_session),
+):
+    return service.auto_assign(db)

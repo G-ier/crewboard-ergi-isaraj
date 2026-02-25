@@ -4,7 +4,8 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from sqlalchemy import select, and_
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from app.domains.crew_assignment.models import CrewAssignment
 from app.domains.crew_assignment.repository import CrewAssignmentRepository
@@ -12,6 +13,9 @@ from app.domains.crew_assignment.schemas import (
     AssignmentCreate,
     AssignmentValidationResult,
     ValidationError,
+    AutoAssignmentResult,
+    AutoAssignmentSuccess,
+    AutoAssignmentFailure,
 )
 from app.domains.flights.models import Flight
 from app.domains.crew_management.models import CrewMember
@@ -57,13 +61,11 @@ class CrewAssignmentService:
 
         # aircraft check
         if crew.qualifications:
-            quals = [q.strip().upper() for q in crew.qualifications.split(",")]
-            aircraft_type = flight.aircraft.strip().upper()
+            quals = [q.strip() for q in crew.qualifications.split(",")]
+            aircraft_type = flight.aircraft.strip()
             
-            has_qualification = any(
-                aircraft_type in q or q in aircraft_type 
-                for q in quals
-            )
+            has_qualification = aircraft_type in quals
+            
             if not has_qualification:
                 errors.append(
                     ValidationError(
@@ -116,43 +118,32 @@ class CrewAssignmentService:
         self, db: Session, crew_employee_id: str, new_flight: Flight
     ) -> Optional[ValidationError]:
         
-        # departure #TODO parse date
         new_departure = self._parse_flight_time(new_flight.departure)
         if not new_departure:
             return None
 
-        # try to get the last assginment period
-        stmt = (
-            select(CrewAssignment)
-            .join(Flight, CrewAssignment.flight_id == Flight.id)
-            .where(
-                and_(
-                    CrewAssignment.crew_employee_id == crew_employee_id,
-                    CrewAssignment.removed_at.is_(None),
-                )
-            )
-            .order_by(Flight.arrival.desc())
-            .limit(1)
-        )
-        last_assignment = db.execute(stmt).scalar_one_or_none()
+        new_arrival = self._parse_flight_time(new_flight.arrival)
+        if not new_arrival:
+            return None
 
-        # if found then check with last flight if new_dep - arrival_time is less than allowed
-        if last_assignment:
-            last_flight = db.execute(
-                select(Flight).where(Flight.id == last_assignment.flight_id)
+        assignments = self.repo.get_by_crew_member(db, crew_employee_id)
+        
+        for assignment in assignments:
+            flight = db.execute(
+                select(Flight).where(Flight.id == assignment.flight_id)
             ).scalar_one_or_none()
             
-            if last_flight:
-                last_arrival = self._parse_flight_time(last_flight.arrival)
+            if flight:
+                last_arrival = self._parse_flight_time(flight.arrival)
                 if last_arrival and new_departure:
-                    
-                    rest_hours = (new_departure - last_arrival).total_seconds() / 3600
-                    if rest_hours < 10:
-                        return ValidationError(
-                            code="INSUFFICIENT_REST",
-                            message=f"Rest period of {rest_hours:.1f} hours is less than required 10 hours. "
-                                    f"Last flight arrived at {last_flight.arrival}, new flight departs at {new_flight.departure}",
-                        )
+                    if last_arrival < new_departure:
+                        rest_hours = (new_departure - last_arrival).total_seconds() / 3600
+                        if rest_hours < 10:
+                            return ValidationError(
+                                code="INSUFFICIENT_REST",
+                                message=f"Rest period of {rest_hours:.1f} hours is less than required 10 hours. "
+                                        f"Last flight arrived at {flight.arrival}, new flight departs at {new_flight.departure}",
+                            )
 
         return None
 
@@ -167,22 +158,17 @@ class CrewAssignmentService:
 
         flight_date = new_departure.date()
 
-        # all assignments for 1 day
-        start_of_day = datetime.combine(flight_date, datetime.min.time())
-        end_of_day = datetime.combine(flight_date, datetime.max.time())
-
-        stmt = (
-            select(CrewAssignment)
-            .join(Flight, CrewAssignment.flight_id == Flight.id)
-            .where(
-                and_(
-                    CrewAssignment.crew_employee_id == crew_employee_id,
-                    CrewAssignment.removed_at.is_(None),
-                    Flight.departure.contains(flight_date.strftime("%b %d")),
-                )
-            )
-        )
-        existing_assignments = db.execute(stmt).scalars().all()
+        all_assignments = self.repo.get_by_crew_member(db, crew_employee_id)
+        
+        existing_assignments = []
+        for assignment in all_assignments:
+            flight = db.execute(
+                select(Flight).where(Flight.id == assignment.flight_id)
+            ).scalar_one_or_none()
+            if flight:
+                dep = self._parse_flight_time(flight.departure)
+                if dep and dep.date() == flight_date:
+                    existing_assignments.append(assignment)
 
         # get total
         total_hours = new_flight.duty_hrs
@@ -205,7 +191,7 @@ class CrewAssignmentService:
     def _check_no_overlap(
         self, db: Session, crew_employee_id: str, new_flight: Flight
     ) -> Optional[ValidationError]:
-        """Check if the crew member would have overlapping flights."""
+
         new_departure = self._parse_flight_time(new_flight.departure)
         new_arrival = self._parse_flight_time(new_flight.arrival)
         
@@ -237,19 +223,19 @@ class CrewAssignmentService:
 
     def _parse_flight_time(self, time_str: str) -> Optional[datetime]:
         
-        try:
+        if not time_str:
+            return None
             
-            current_year = datetime.now().year
-            parsed = datetime.strptime(f"{current_year}, {time_str}", "%Y, %b %d, %H:%M")
-            return parsed
+        try:
+            return datetime.fromisoformat(time_str.replace('Z', '+00:00'))
         except ValueError:
-            try:
-                
-                current_year = datetime.now().year
-                parsed = datetime.strptime(f"{current_year}, {time_str}", "%Y, %b %d, %H:%M")
-                return parsed
-            except ValueError:
-                return None
+            pass
+        
+        try:
+            current_year = datetime.now().year
+            return datetime.strptime(f"{current_year}, {time_str}", "%Y, %b %d, %H:%M")
+        except ValueError:
+            return None
 
     def create_assignment(
         self, db: Session, payload: AssignmentCreate
@@ -260,14 +246,32 @@ class CrewAssignmentService:
         )
 
         if not validation.valid:
+            
+            existing = self.repo.get_any_by_flight_and_crew(
+                db, payload.flight_id, payload.crew_employee_id
+            )
+            if existing and existing.removed_at:
+                error_codes = [e.code for e in validation.errors]
+                if error_codes == ["DUPLICATE_ASSIGNMENT"]:
+                    reactivated = self.repo.reactivate(db, existing)
+                    return reactivated, validation
+            
             return None, validation
 
-    
-        assignment = self.repo.create(
-            db,
-            flight_id=payload.flight_id,
-            crew_employee_id=payload.crew_employee_id,
-        )
+        try:
+            assignment = self.repo.create(
+                db,
+                flight_id=payload.flight_id,
+                crew_employee_id=payload.crew_employee_id,
+            )
+        except IntegrityError:
+            db.rollback()
+            existing = self.repo.get_any_by_flight_and_crew(
+                db, payload.flight_id, payload.crew_employee_id
+            )
+            if existing and existing.removed_at:
+                return self.repo.reactivate(db, existing), validation
+            raise
 
         return assignment, validation
 
@@ -320,3 +324,59 @@ class CrewAssignmentService:
                 detail="Assignment not found",
             )
         return assignment
+
+    def auto_assign(self, db: Session) -> AutoAssignmentResult:
+        all_crew = db.execute(select(CrewMember)).scalars().all()
+        all_flights = db.execute(select(Flight)).scalars().all()
+        
+        assigned_flights = set()
+        crew_hours = {c.id: 0.0 for c in all_crew}
+        
+        assigned = []
+        failed = []
+        
+        for flight in all_flights:
+            existing = db.execute(
+                select(CrewAssignment).where(
+                    and_(
+                        CrewAssignment.flight_id == flight.id,
+                        CrewAssignment.removed_at.is_(None)
+                    )
+                )
+            ).scalar_one_or_none()
+            if existing:
+                assigned_flights.add(flight.id)
+                continue
+            
+            eligible = []
+            for crew in all_crew:
+                validation = self.validate_assignment(db, flight.id, crew.id)
+                if validation.valid:
+                    eligible.append((crew.id, crew_hours[crew.id]))
+            
+            if not eligible:
+                failed.append(AutoAssignmentFailure(flight_id=flight.id, reason="No eligible crew"))
+                continue
+            
+            eligible.sort(key=lambda x: x[1])
+            best_crew = eligible[0][0]
+            
+            assignment = CrewAssignment(
+                flight_id=flight.id,
+                crew_employee_id=best_crew,
+                created_at=datetime.utcnow(),
+            )
+            db.add(assignment)
+            db.commit()
+            
+            crew_hours[best_crew] += flight.duty_hrs
+            assigned_flights.add(flight.id)
+            assigned.append(AutoAssignmentSuccess(flight_id=flight.id, crew_member_id=best_crew))
+        
+        return AutoAssignmentResult(
+            assigned=assigned,
+            failed=failed,
+            total_flights=len(all_flights),
+            total_assigned=len(assigned),
+            total_failed=len(failed),
+        )

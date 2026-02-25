@@ -31,3 +31,23 @@ class FlightRead(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class ScheduleItem(BaseModel):
+    
+    type: str = Field(..., description="Either 'flight' or 'rest'")
+    flight: Optional[FlightRead] = None
+    rest_hours: Optional[float] = None
+    date: Optional[str] = None
+    
+    class Config:
+        from_attributes = True
+
+
+class CrewScheduleResponse(BaseModel):
+    
+    crew_member_id: str
+    schedule: List[ScheduleItem]
+    
+    class Config:
+        from_attributes = True

@@ -2,11 +2,20 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.database.engine import get_db_session
-from app.domains.flights.schemas import FlightCreate, FlightRead
+from app.domains.flights.schemas import FlightCreate, FlightRead, CrewScheduleResponse
 from app.domains.flights.service import FlightService
 
 router = APIRouter(prefix="/flights", tags=["Flight Management"])
 service = FlightService()
+
+
+@router.get("/schedule/{crew_member_id}", response_model=CrewScheduleResponse)
+def get_crew_schedule(
+    crew_member_id: str,
+    db: Session = Depends(get_db_session),
+):
+
+    return service.get_crew_schedule(db, crew_member_id)
 
 
 @router.get("/{flight_id}", response_model=FlightRead)

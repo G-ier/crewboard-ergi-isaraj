@@ -9,7 +9,8 @@ RUN groupadd -r app && useradd -r -g app -d /app -s /usr/sbin/nologin app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --no-dev --frozen
 
-COPY . .
+COPY app ./app
+COPY tests ./tests
 
 EXPOSE 8001
 

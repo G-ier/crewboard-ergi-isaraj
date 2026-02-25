@@ -1,9 +1,10 @@
 from typing import Optional, Sequence
 
-from sqlalchemy import select
+from sqlalchemy import select, and_
 from sqlalchemy.orm import Session
 
 from app.domains.flights.models import Flight
+from app.domains.crew_assignment.models import CrewAssignment
 
 
 class FlightRepository:
@@ -72,4 +73,21 @@ class FlightRepository:
             stmt = stmt.where(Flight.aircraft.ilike(f"%{aircraft.strip()}%"))
 
         stmt = stmt.offset(offset).limit(limit)
+        return list(db.execute(stmt).scalars().all())
+
+    def get_flights_by_crew_member(
+        self, db: Session, crew_employee_id: str
+    ) -> Sequence[Flight]:
+
+        stmt = (
+            select(Flight)
+            .join(CrewAssignment, Flight.id == CrewAssignment.flight_id)
+            .where(
+                and_(
+                    CrewAssignment.crew_employee_id == crew_employee_id,
+                    CrewAssignment.removed_at.is_(None),
+                )
+            )
+            .order_by(Flight.departure.asc())
+        )
         return list(db.execute(stmt).scalars().all())

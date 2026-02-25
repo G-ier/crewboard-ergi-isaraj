@@ -25,6 +25,24 @@ class CrewAssignmentRepository:
         )
         return db.execute(stmt).scalar_one_or_none()
 
+    def get_any_by_flight_and_crew(
+        self, db: Session, flight_id: str, crew_employee_id: str
+    ) -> Optional[CrewAssignment]:
+        
+        stmt = select(CrewAssignment).where(
+            and_(
+                CrewAssignment.flight_id == flight_id,
+                CrewAssignment.crew_employee_id == crew_employee_id,
+            )
+        )
+        return db.execute(stmt).scalar_one_or_none()
+
+    def reactivate(self, db: Session, assignment: CrewAssignment) -> CrewAssignment:
+        assignment.removed_at = None
+        db.commit()
+        db.refresh(assignment)
+        return assignment
+
     def get_by_flight(self, db: Session, flight_id: str) -> Sequence[CrewAssignment]:
         stmt = select(CrewAssignment).where(
             and_(
@@ -52,6 +70,14 @@ class CrewAssignmentRepository:
         flight_id: str,
         crew_employee_id: str,
     ) -> CrewAssignment:
+        existing = self.get_any_by_flight_and_crew(db, flight_id, crew_employee_id)
+        if existing:
+            if existing.removed_at:
+                return self.reactivate(db, existing)
+            else:
+                from sqlalchemy.orm.exc import NoResultFound
+                raise NoResultFound("Assignment already exists")
+        
         assignment = CrewAssignment(
             flight_id=flight_id,
             crew_employee_id=crew_employee_id,
@@ -112,8 +138,6 @@ class CrewAssignmentRepository:
     def get_conflicting_assignments(
         self, db: Session, crew_employee_id: str, flight_id: str
     ) -> Sequence[CrewAssignment]:
-        
-        # for now, just return assignments for the same crew member
         stmt = select(CrewAssignment).where(
             and_(
                 CrewAssignment.crew_employee_id == crew_employee_id,
