@@ -1,6 +1,6 @@
 # Crewboard
 
-A FastAPI web application.
+A FastAPI web application for flight crew assignment and scheduling optimization.
 
 ## Tech Stack
 
@@ -14,20 +14,38 @@ A FastAPI web application.
 
 ```
 crewboard/
-├── backend/          # FastAPI application
-│   ├── app/          # Main application code
-│   │   ├── api/     # API endpoints (app layer)
-│   │   ├── database/ # Database connection/engine
-│   │   ├── model/   # Database models
-│   │   ├── schema/  # Pydantic schemas
-│   │   ├── service/ # Business logic layer
-│   │   └── repository/ # Data access layer
-│   └── tests/       # Backend tests
-├── db/               # Database setup scripts
-└── frontend/         # Frontend application
+├── backend/
+│   ├── app/
+│   │   ├── database/        # Database connection/engine
+│   │   ├── domains/          # Domain modules (bounded contexts)
+│   │   │   ├── crew_assignment/    # Crew assignment domain
+│   │   │   │   ├── models.py       # SQLAlchemy models
+│   │   │   │   ├── repository.py   # Data access layer
+│   │   │   │   ├── service.py      # Business logic
+│   │   │   │   ├── router.py       # API endpoints
+│   │   │   │   └── schemas.py      # Pydantic schemas
+│   │   │   ├── crew_management/    # Crew management domain
+│   │   │   │   ├── models.py       # SQLAlchemy models
+│   │   │   │   ├── repository.py   # Data access layer
+│   │   │   │   ├── service.py      # Business logic
+│   │   │   │   ├── router.py       # API endpoints
+│   │   │   │   └── schemas.py      # Pydantic schemas
+│   │   │   └── flights/            # Flights domain
+│   │   │       ├── models.py       # SQLAlchemy models
+│   │   │       ├── repository.py   # Data access layer
+│   │   │       ├── service.py      # Business logic
+│   │   │       ├── router.py       # API endpoints
+│   │   │       └── schemas.py      # Pydantic schemas
+│   │   └── main.py          # FastAPI application entry point
+│   ├── tests/
+│   │   ├── unit/            # Unit tests
+│   │   └── integration/     # Integration tests
+│   └── seed.py             # Database seeding script
+├── frontend/               # Frontend application - not completed
+└── docker-compose.yaml     # Docker composition YAML
 ```
 
-## Requirements
+## Requirements (only for not containerized deployments)
 
 Install dependencies with [uv](https://github.com/astral-sh/uv):
 
@@ -35,10 +53,40 @@ Install dependencies with [uv](https://github.com/astral-sh/uv):
 uv sync
 ```
 
-## Database
+## Start system
 
-Set up the database:
+Run this from root:
 
 ```bash
-python db/setup.py
+docker compose up -d --build
+```
+
+Then seed the database by running:
+
+```bash
+cd backend
+uv run python seed.py
+```
+
+## Running Tests
+
+I would advise to run the tests within the container itself after it has finished building and is running.
+
+First, find the Docker instance ID which should be under the name crewboard-backend-1:
+
+```bash
+docker ps -a
+```
+
+Copy the ID and run the following:
+
+```bash
+docker exec -it <ID> bash
+```
+
+After that, run the following commands in the container:
+
+```bash
+cd tests
+uv run pytest -q -v
 ```
